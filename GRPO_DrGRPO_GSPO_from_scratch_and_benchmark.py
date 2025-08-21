@@ -1,3 +1,14 @@
+# Author: "Faen Zhang, zhangfaen@gmail.com". 
+# Github url: https://github.com/zhangfaen/GRPO_DrGRPO_GSPO_from_scratch_and_benchmark
+# 
+# If you use this code, please cite the github repo url and the author name. 
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
 import os
 import re
 import copy
