@@ -5,7 +5,7 @@
   
 In the field of Reinforcement Learning (RL) for Large Language Models (LLMs), an exciting direction is model optimization using Verifiable Rewards, known as RLVR. Traditional Reinforcement Learning from Human Feedback (RLHF) or a dedicated Value Model can be subjective and expensive. In contrast, RLVR guides model learning through programmatic, objective reward functions. For instance, in mathematics, the correctness of an answer can be verified by computation. This approach offers a more efficient and scalable path to enhance complex abilities like reasoning in models.
 
-Guided by the core idea of RLVR, a series of excellent algorithms have emerged, with GRPO, DrGRPO, and GSPO being the most representative. GRPO is the core algorithm for training DeepSeek V2, while GSPO is the core algorithm for training Qwen2. They both evolve from the classic PPO algorithm but have taken different exploratory paths in pursuit of higher efficiency and stability. This blog post will briefly introduce the core ideas of these three algorithms and present a Python script I've written to help you understand and reproduce them from scratch, allowing for a direct comparison of their effectiveness.
+Guided by the core idea of RLVR, a series of excellent algorithms have emerged, with GRPO, DrGRPO, and GSPO being the most representative. GRPO is the core algorithm for training DeepSeek V2, while GSPO is the core algorithm for training Qwen2. They both evolve from the classic PPO algorithm but have taken different exploratory paths in pursuit of higher efficiency and stability. 
 
 ![alt text](images/grpo_drgrpo_gspo.png)
 

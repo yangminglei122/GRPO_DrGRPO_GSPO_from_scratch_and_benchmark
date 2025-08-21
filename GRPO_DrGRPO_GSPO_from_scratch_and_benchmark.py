@@ -555,16 +555,6 @@ class RLVRTrainer:
             # 2. 沿序列维度求和，然后除以序列的实际长度
             sum_log_ratio = (log_ratio * rollout_data["completion_mask"]).sum(dim=1)
             seq_len = rollout_data["completion_mask"].sum(dim=1).clamp(min=1.0) # clamp 避免除零
-            
-            # 注意：当训练进行时，当前策略模型（self.model）的参数会逐渐偏离参考模型（self.ref_model）。
-            # 这可能导致 log_ratio 的值变得非常大。 sum_log_ratio / seq_len 这个平均对数概率比就可能是一个很大的正数。
-            # 当一个很大的数作为 torch.exp() 的输入时，结果会发生数值上溢，变为 inf (无穷大)。
-            # 这个 inf 会在后续的 surrogate_loss 和 kl 散度计算中传播，并由于 inf - inf 之类的操作最终产生 nan 损失。
-            # 为了解决这个问题，我们需要在执行 torch.exp() 之前，对输入的对数概率比进行裁剪（clipping），
-            # 以防止其值过大导致溢出。这是一种在 PPO 类算法中常用的稳定性技巧。
-            # avg_log_ratio = (sum_log_ratio / seq_len).clamp(-10, 10)  # 将值限制在[-10, 10]范围内
-            # seq_ratio = torch.exp(avg_log_ratio)
-            
             seq_ratio = torch.exp(sum_log_ratio / seq_len)
             
             # 将序列级的 ratio 广播到每个 token 上
