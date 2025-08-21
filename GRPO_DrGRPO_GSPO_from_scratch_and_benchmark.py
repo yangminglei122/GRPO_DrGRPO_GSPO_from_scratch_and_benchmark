@@ -207,10 +207,12 @@ class RLVRTrainer:
         Returns:
             Accuracy percentage
         """
-        self.model.eval()
         correct = 0
         total = len(eval_data)
+        if total == 0:
+            return 0
         
+        self.model.eval()
         logger.info("\n" + "="*50)
         logger.info(f"EVALUATION ON {total} EXAMPLES")
         logger.info("="*50)
@@ -542,16 +544,16 @@ class RLVRTrainer:
         # Compute current token log probabilities
         token_log_probs = self._compute_log_probs(
             self.model,
-            rollout_data["input_ids"],
-            rollout_data["attention_mask"],
-            rollout_data["logits_to_keep"]
+            rollout_data["input_ids"],      # shape is [batch_size * num_generations, max_len_of_input_prompts + max_completion_length], e.g. [16, 487]
+            rollout_data["attention_mask"], # shape is [batch_size * num_generations, max_len_of_input_prompts + max_completion_length], e.g. [16, 487]
+            rollout_data["logits_to_keep"]  # max_completion_length, e.g. 400
         )
-        
+        # token_log_probs.shape is [batch_size * num_generations, max_completion_length], e.g. [16, 400]
+
         # Calculate probability ratio
         if importance_sampling_level == "token":
             ratio = torch.exp(token_log_probs - rollout_data["old_log_probs"])
-        else:  
-            # sequence-level importance sampling for GSPO   
+        else:
             # Calculate the sequence-level log ratio per paper's formula (7).
             # GSPO's objective is sequence-level. However, by broadcasting the single
             # sequence-level ratio (seq_ratio) to every token in the sequence,
@@ -560,16 +562,16 @@ class RLVRTrainer:
             # because all tokens within a sequence share the same advantage and the same ratio.         
             
             # 计算序列级的 log ratio
-            log_ratio = token_log_probs - rollout_data["old_log_probs"]
+            log_ratio = token_log_probs - rollout_data["old_log_probs"] # log_ratio.shape is [batch_size * num_generations, max_completion_length], e.g. [16, 400]
             
             # 1. 使用 completion_mask 屏蔽 padding tokens
             # 2. 沿序列维度求和，然后除以序列的实际长度
-            sum_log_ratio = (log_ratio * rollout_data["completion_mask"]).sum(dim=1)
-            seq_len = rollout_data["completion_mask"].sum(dim=1).clamp(min=1.0) # clamp 避免除零
-            seq_ratio = torch.exp(sum_log_ratio / seq_len)
+            sum_log_ratio = (log_ratio * rollout_data["completion_mask"]).sum(dim=1) # sum_log_ratio.shape is [batch_size * num_generations], e.g. [16]
+            seq_len = rollout_data["completion_mask"].sum(dim=1).clamp(min=1.0) # clamp 避免除零. seq_len.shape is [batch_size * num_generations], e.g. [16]
+            seq_ratio = torch.exp(sum_log_ratio / seq_len) # seq_ratio.shape is [batch_size * num_generations], e.g. [16]
             
             # 将序列级的 ratio 广播到每个 token 上
-            ratio = seq_ratio.unsqueeze(-1).expand_as(token_log_probs)
+            ratio = seq_ratio.unsqueeze(-1).expand_as(token_log_probs) # ratio.shape is [batch_size * num_generations, max_completion_length], e.g. [16, 400]
         
         # Compute rewards
         rewards = torch.tensor(
@@ -580,24 +582,24 @@ class RLVRTrainer:
             ),
             dtype=torch.float32,
             device=self.device
-        )
+        ) # rewards.shape is [batch_size * num_generations], e.g. [16]
         
         # Reshape rewards and calculate advantages
-        batch_size = rollout_data["batch_size"]
-        num_generations = rollout_data["num_generations"]
-        rewards = rewards.view(batch_size, num_generations)
+        batch_size = rollout_data["batch_size"] # batch_size is 2
+        num_generations = rollout_data["num_generations"] # num_generations is 8
+        rewards = rewards.view(batch_size, num_generations) # rewards.shape is [2, 8]
         
-        avg_reward = rewards.mean().item()
+        avg_reward = rewards.mean().item() # avg_reward is a float
         logger.info(f"Average Reward: {avg_reward:.6f}")
         
         # Calculate advantages based on loss type
         if loss_type == "grpo" or loss_type == "gspo":
             # Original GRPO: standardize rewards within each prompt
             # GSPO: https://arxiv.org/pdf/2507.18071
-            mean_rewards = rewards.mean(dim=1).repeat_interleave(num_generations)
-            std_rewards = rewards.std(dim=1, unbiased=False).repeat_interleave(num_generations)
+            mean_rewards = rewards.mean(dim=1).repeat_interleave(num_generations) # mean_rewards.shape = [batch_size * num_generations], e.g. [16]
+            std_rewards = rewards.std(dim=1, unbiased=False).repeat_interleave(num_generations) # std_rewards.shape = [batch_size * num_generations], e.g. [16]
             std_rewards = torch.clamp(std_rewards, min=1e-4)  # Avoid division by zero
-            advantages = ((rewards.view(-1) - mean_rewards) / std_rewards).unsqueeze(1)
+            advantages = ((rewards.view(-1) - mean_rewards) / std_rewards).unsqueeze(1) # advantages.shape = [batch_size * num_generations, 1], e.g. [16, 1]
         elif loss_type == "dr_grpo":
             # DrGRPO: remove standardization, use reward difference directly
             mean_rewards = rewards.mean(dim=1).repeat_interleave(num_generations)
@@ -606,19 +608,20 @@ class RLVRTrainer:
             raise ValueError(f"Unknown loss type: {loss_type}")
         
         # Compute PPO surrogate objective with clipping
-        surr1 = ratio * advantages
-        surr2 = torch.clamp(ratio, 1 - epsilon, 1 + epsilon) * advantages
+        surr1 = ratio * advantages # surr1.shape is [batch_size * num_generations, max_completion_length], e.g. [16, 400]
+        surr2 = torch.clamp(ratio, 1 - epsilon, 1 + epsilon) * advantages # surr2.shape is [batch_size * num_generations, max_completion_length], e.g. [16, 400]
         surrogate_loss = torch.min(surr1, surr2)
         
-        # Compute KL divergence
+        # Compute KL divergence per token
         kl = torch.exp(rollout_data["ref_log_probs"] - token_log_probs) - \
-             (rollout_data["ref_log_probs"] - token_log_probs) - 1
-        
+             (rollout_data["ref_log_probs"] - token_log_probs) - 1 # rollout_data["ref_log_probs"].shape and token_log_probs.shape are [batch_size * num_generations, max_completion_length], e.g. [16, 400]
+        # kl.shape is [batch_size * num_generations, max_completion_length], e.g. [16, 400]
+
         # Combine losses
-        per_token_loss = surrogate_loss - beta * kl
+        per_token_loss = surrogate_loss - beta * kl # per_token_loss.shape is [batch_size * num_generations, max_completion_length], e.g. [16, 400]
         loss = -((per_token_loss * rollout_data["completion_mask"]).sum(dim=1) / 
-                rollout_data["completion_mask"].sum(dim=1)).mean()
-        
+                rollout_data["completion_mask"].sum(dim=1)).mean() # (per_token_loss * rollout_data["completion_mask"]).sum(dim=1).shape is [batch_size * num_generations], e.g. [16]
+        # loss.shape is []
         return loss, avg_reward
 
     def train(
